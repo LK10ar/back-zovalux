@@ -183,8 +183,9 @@ app.post('/api/book', async (req, res) => {
 
 app.post('/api/admin/login', (req, res) => {
   const secret = String((req.body && req.body.secret) || '').trim();
-  if(ADMIN_SECRET && secret === ADMIN_SECRET) return res.json({ success: true });
-  res.status(401).json({ error: 'INVALID_SECRET' });
+  const cleanExpected = ADMIN_SECRET ? ADMIN_SECRET.trim() : ADMIN_SECRET;
+  if(cleanExpected && secret === cleanExpected) return res.json({ success: true });
+  res.status(401).json({ error: 'INVALID_SECRET', receivedLength: secret.length, expectedLength: cleanExpected ? cleanExpected.length : 0 });
 });
 
 app.get('/api/admin/bookings', requireAdmin, async (req, res) => {
