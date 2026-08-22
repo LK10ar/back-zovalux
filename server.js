@@ -15,7 +15,35 @@ const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
 app.use(express.json({ limit: '8mb' })); // gallery images en base64
+// --- Template HTML global pour les emails ---
+function getEmailTemplate(title, content) {
+  return `
+    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #F6F1E7; padding: 40px 20px; color: #15120D;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.05);">
+        
+        <!-- En-tête noire avec logo -->
+        <div style="background-color: #15120D; padding: 30px; text-align: center; border-bottom: 3px solid #D4AF37;">
+          <img src="https://lk10ar.github.io/Zovalux/logo.png" alt="Zovalux" style="width: 80px; height: auto;">
+        </div>
+        
+        <!-- Contenu -->
+        <div style="padding: 40px 30px;">
+          <h2 style="margin-top: 0; color: #15120D; font-size: 22px; font-weight: 600;">${title}</h2>
+          <div style="font-size: 15px; line-height: 1.6; color: #333333;">
+            ${content}
+          </div>
+        </div>
+        
+        <!-- Pied de page -->
+        <div style="background-color: #F9F9F9; padding: 20px 30px; text-align: center; font-size: 12px; color: #8A7C64; border-top: 1px solid #EEEEEE;">
+          <strong>Zovalux</strong> — Nettoyage automobile premium à domicile<br>
+          Bordeaux & alentours
+        </div>
 
+      </div>
+    </div>
+  `;
+}
 const ALLOWED_ORIGINS = [
   'https://lk10ar.github.io',
   'https://LK10ar.github.io', // Tolérance pour les majuscules de ton pseudo
@@ -159,13 +187,17 @@ app.post('/api/book', async (req, res) => {
     const result = await collection.insertOne(doc);
 
     // Email au client : demande reçue, en attente
+ // Email au client : demande reçue, en attente
     sendMail({
       to: doc.email,
       subject: 'Zovalux — Votre demande de réservation est bien reçue',
-      html: `<p>Bonjour ${doc.name},</p>
-        <p>Votre demande de réservation pour le <b>${doc.date}</b> (${doc.service || 'formule non précisée'}) a bien été reçue.</p>
-        <p>Elle est actuellement <b>en attente de confirmation</b> par notre équipe. Vous recevrez un email dès qu'elle sera validée.</p>
-        <p>— Zovalux</p>`
+      html: getEmailTemplate(
+        'Demande de réservation',
+        `<p>Bonjour <b>${doc.name}</b>,</p>
+         <p>Votre demande pour le <b>${doc.date}</b> (${doc.service || 'formule non précisée'}) a bien été enregistrée.</p>
+         <p>Elle est actuellement <b>en attente de confirmation</b> par notre équipe. Vous recevrez un nouvel email dès qu'elle sera validée.</p>
+         <p>À très vite,<br>L'équipe Zovalux</p>`
+      )
     });
     // Email à l'admin : nouvelle demande à traiter
     if(process.env.ADMIN_EMAIL){
@@ -232,14 +264,22 @@ app.post('/api/admin/bookings/:id/:action', requireAdmin, async (req, res) => {
 
     await collection.updateOne({ _id: new ObjectId(id) }, { $set: { status } });
 
+    // --- LE NOUVEAU DESIGN EST APPLIQUÉ ICI ---
+    const title = status === 'confirmed' ? 'Réservation confirmée ✓' : 'Mise à jour de votre demande';
+    const content = status === 'confirmed'
+      ? `<p>Bonjour <b>${booking.name}</b>,</p>
+         <p>Excellente nouvelle ! Votre réservation du <b>${booking.date}</b> est <b>confirmée</b>.</p>
+         <p>Notre équipe se présentera à l'adresse indiquée avec tout le matériel nécessaire pour prendre soin de votre véhicule.</p>
+         <p>À très bientôt,<br>L'équipe Zovalux</p>`
+      : `<p>Bonjour <b>${booking.name}</b>,</p>
+         <p>Nous ne pouvons malheureusement pas honorer votre demande du <b>${booking.date}</b> (créneau indisponible ou hors zone).</p>
+         <p>N'hésitez pas à faire une nouvelle demande pour une autre date sur notre site.</p>
+         <p>Cordialement,<br>L'équipe Zovalux</p>`;
+
     sendMail({
       to: booking.email,
-      subject: status === 'confirmed'
-        ? 'Zovalux — Votre réservation est confirmée ✓'
-        : 'Zovalux — Votre demande n\'a pas pu être retenue',
-      html: status === 'confirmed'
-        ? `<p>Bonjour ${booking.name},</p><p>Votre réservation du <b>${booking.date}</b> est confirmée. À bientôt !</p><p>— Zovalux</p>`
-        : `<p>Bonjour ${booking.name},</p><p>Nous ne pouvons malheureusement pas honorer votre demande du <b>${booking.date}</b>. N'hésitez pas à choisir une autre date.</p><p>— Zovalux</p>`
+      subject: status === 'confirmed' ? 'Zovalux — Votre réservation est confirmée ✓' : 'Zovalux — Votre demande n\'a pas pu être retenue',
+      html: getEmailTemplate(title, content)
     });
 
     res.json({ success: true });
