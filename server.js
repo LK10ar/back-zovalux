@@ -19,13 +19,21 @@ app.use(express.json({ limit: '8mb' })); // gallery images en base64
 
 const ALLOWED_ORIGINS = [
   'https://lk10ar.github.io',
+  'https://LK10ar.github.io', // Tolérance pour les majuscules de ton pseudo
   'http://localhost:3000',
-  'http://127.0.0.1:5500'
+  'http://127.0.0.1:5500',
+  'http://127.0.0.1:5501', // Port alternatif très utilisé en local
+  'null' // Autorise les tests depuis un fichier ouvert sur le disque dur (file:///)
 ];
+
 app.use(cors({
   origin: function(origin, callback){
-    if(!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error('Origin non autorisée'));
+    // On autorise si l'origine est dans la liste (avec ou sans majuscules) ou locale
+    if(!origin || origin === 'null' || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes(origin.toLowerCase())){
+      return callback(null, true);
+    }
+    // L'astuce ici : afficher l'adresse exacte qui bloque dans les logs Render !
+    callback(new Error('Origin non autorisée : ' + origin));
   }
 }));
 
