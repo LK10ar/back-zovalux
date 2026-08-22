@@ -11,7 +11,6 @@
 
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
@@ -55,31 +54,40 @@ async function getDb(){
 }
 
 // ---------- Email ----------
-let transporter = null;
-function getTransporter(){
-  if(transporter) return transporter;
-  if(!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD){
-    console.warn('GMAIL_USER / GMAIL_APP_PASSWORD non configurés — emails désactivés.');
-    return null;
-  }
-  transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD
-    }
-  });
-  return transporter;
-}
-
+// ---------- Email (via API Brevo) ----------
 async function sendMail({ to, subject, html }){
-  const t = getTransporter();
-  if(!t) return false;
+  const apiKey = process.env.BREVO_API_KEY;
+  if(!apiKey){
+    console.warn('BREVO_API_KEY non configurée — emails désactivés.');
+    return false;
+  }
+
   try{
-    await t.sendMail({ from: `Zovalux <${process.env.GMAIL_USER}>`, to, subject, html });
+    // Appel direct à l'API de Brevo en HTTPS (jamais bloqué par Render)
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'api-key': apiKey
+      },
+      body: JSON.stringify({
+        sender: { name: 'Zovalux', email: 'zovalux.pro@gmail.com' }, // Ton adresse expéditeur vérifiée
+        to: [{ email: to }],
+        subject: subject,
+        htmlContent: html
+      })
+    });
+
+    if(!response.ok){
+      const errorData = await response.json();
+      console.error('Erreur API Brevo:', errorData);
+      return false;
+    }
+
     return true;
   }catch(err){
-    console.error('Erreur envoi email:', err.message);
+    console.error('Erreur de connexion à Brevo:', err.message);
     return false;
   }
 }
