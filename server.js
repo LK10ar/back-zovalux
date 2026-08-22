@@ -32,7 +32,8 @@ app.use(cors({
 const MAX_PER_DAY = 3;
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.MONGODB_DB || 'zovalux';
-const ADMIN_SECRET = process.env.ADMIN_SECRET;
+const ADMIN_SECRET = (process.env.ADMIN_SECRET || '').trim();
+console.log(`ADMIN_SECRET chargé : ${ADMIN_SECRET ? ADMIN_SECRET.length + ' caractères' : 'ABSENT'}`);
 
 let db;
 async function getDb(){
@@ -77,7 +78,7 @@ async function sendMail({ to, subject, html }){
 
 // ---------- Auth admin (simple) ----------
 function requireAdmin(req, res, next){
-  const secret = req.headers['x-admin-secret'];
+  const secret = String(req.headers['x-admin-secret'] || '').trim();
   if(!ADMIN_SECRET || secret !== ADMIN_SECRET){
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
@@ -181,7 +182,7 @@ app.post('/api/book', async (req, res) => {
 // =======================================================
 
 app.post('/api/admin/login', (req, res) => {
-  const { secret } = req.body || {};
+  const secret = String((req.body && req.body.secret) || '').trim();
   if(ADMIN_SECRET && secret === ADMIN_SECRET) return res.json({ success: true });
   res.status(401).json({ error: 'INVALID_SECRET' });
 });
@@ -323,6 +324,17 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
 });
 
 app.get('/', (req, res) => res.send('Zovalux API — OK'));
+
+// Diagnostic — ne révèle jamais la valeur, juste si les variables sont bien chargées
+app.get('/api/debug-config', (req, res) => {
+  res.json({
+    adminSecretConfigured: !!process.env.ADMIN_SECRET,
+    adminSecretLength: process.env.ADMIN_SECRET ? process.env.ADMIN_SECRET.length : 0,
+    mongoConfigured: !!process.env.MONGODB_URI,
+    gmailConfigured: !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD),
+    adminEmailConfigured: !!process.env.ADMIN_EMAIL
+  });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Zovalux API en écoute sur le port ${PORT}`));
