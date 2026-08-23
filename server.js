@@ -45,6 +45,8 @@ function getEmailTemplate(title, content) {
   `;
 }
 const ALLOWED_ORIGINS = [
+  'http://zovalux.com',
+  'http://www.zovalux.com',
   'https://zovalux.com',
   'https://www.zovalux.com',
   'https://lk10ar.github.io',
