@@ -59,11 +59,22 @@ const ALLOWED_ORIGINS = [
 
 app.use(cors({
   origin: function(origin, callback){
-    // On autorise si l'origine est dans la liste (avec ou sans majuscules) ou locale
-    if(!origin || origin === 'null' || ALLOWED_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes(origin.toLowerCase())){
+    // Autorise les requêtes sans origine (comme Postman ou les scripts serveurs)
+    if(!origin || origin === 'null') return callback(null, true);
+    
+    const originLower = origin.toLowerCase();
+    
+    // RÈGLE INTELLIGENTE : On autorise automatiquement tout ce qui touche à zovalux.com, GitHub ou le local
+    if (
+      originLower.includes('zovalux.com') || 
+      originLower.includes('lk10ar.github.io') || 
+      originLower.includes('localhost') || 
+      originLower.includes('127.0.0.1')
+    ) {
       return callback(null, true);
     }
-    // L'astuce ici : afficher l'adresse exacte qui bloque dans les logs Render !
+    
+    // Sinon, on bloque et on affiche l'erreur dans les logs Render
     callback(new Error('Origin non autorisée : ' + origin));
   }
 }));
