@@ -45,6 +45,8 @@ function getEmailTemplate(title, content) {
   `;
 }
 const ALLOWED_ORIGINS = [
+  'https://zovalux.com',
+  'https://www.zovalux.com',
   'https://lk10ar.github.io',
   'https://LK10ar.github.io', // Tolérance pour les majuscules de ton pseudo
   'http://localhost:3000',
