@@ -79,7 +79,13 @@ app.use(cors({
   }
 }));
 
-const MAX_PER_DAY = 3;
+const MAX_PER_DAY = 5;
+const SERVICE_DURATION_MIN = 60;      // 1h de main d'œuvre par intervention
+const DAY_START = '08:00';
+const DAY_END = '18:00';
+const SLOT_STEP_MIN = 10;             // granularité des créneaux proposés
+const DEFAULT_TRAVEL_MIN = 20;        // valeur de secours si géocodage/trajet échoue
+const NOMINATIM_USER_AGENT = 'ZovaluxBooking/1.0 (contact: zovalux.pro@gmail.com)';
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.MONGODB_DB || 'zovalux';
 const ADMIN_SECRET = (process.env.ADMIN_SECRET || '').trim();
@@ -154,6 +160,95 @@ function isValidFutureDate(dateStr){
 }
 
 // =======================================================
+// CRÉNEAUX HORAIRES — géocodage + temps de trajet (OSRM, gratuit)
+// =======================================================
+
+const geocodeCache = new Map();
+
+async function geocodeAddress(address){
+  if(!address) return null;
+  const key = String(address).trim().toLowerCase();
+  if(geocodeCache.has(key)) return geocodeCache.get(key);
+  try{
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address + ', Bordeaux, France')}`;
+    const res = await fetch(url, { headers: { 'User-Agent': NOMINATIM_USER_AGENT } });
+    const data = await res.json();
+    if(!data || !data.length){ geocodeCache.set(key, null); return null; }
+    const coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    geocodeCache.set(key, coords);
+    return coords;
+  }catch(err){
+    console.warn('Géocodage échoué pour', address, err.message);
+    return null;
+  }
+}
+
+async function travelTimeMinutes(fromCoords, toCoords){
+  if(!fromCoords || !toCoords) return DEFAULT_TRAVEL_MIN;
+  try{
+    const url = `https://router.project-osrm.org/route/v1/driving/${fromCoords.lon},${fromCoords.lat};${toCoords.lon},${toCoords.lat}?overview=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(!data.routes || !data.routes.length) return DEFAULT_TRAVEL_MIN;
+    return Math.ceil(data.routes[0].duration / 60);
+  }catch(err){
+    console.warn('OSRM échoué', err.message);
+    return DEFAULT_TRAVEL_MIN;
+  }
+}
+
+function timeToMinutes(hhmm){
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+function minutesToTime(min){
+  const h = Math.floor(min / 60), m = min % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+// Calcule les heures de créneau disponibles ce jour-là pour une nouvelle adresse,
+// en tenant compte d'1h de main d'œuvre + du trajet estimé vers/depuis chaque
+// rendez-vous déjà pris ce jour-là.
+async function computeAvailableSlots(database, date, newAddress){
+  const dayBookings = await database.collection('bookings')
+    .find({ date, status: { $ne: 'rejected' } })
+    .project({ time: 1, address: 1 })
+    .toArray();
+
+  if(dayBookings.length >= MAX_PER_DAY) return [];
+
+  const newCoords = await geocodeAddress(newAddress);
+
+  const existing = [];
+  for(const b of dayBookings){
+    if(!b.time) continue; // anciennes réservations sans heure : ignorées du calcul de trajet
+    const coords = await geocodeAddress(b.address);
+    const travel = await travelTimeMinutes(coords, newCoords);
+    existing.push({ time: b.time, travel });
+  }
+
+  const dayStart = timeToMinutes(DAY_START);
+  const dayEnd = timeToMinutes(DAY_END);
+  const slots = [];
+
+  for(let start = dayStart; start + SERVICE_DURATION_MIN <= dayEnd; start += SLOT_STEP_MIN){
+    const end = start + SERVICE_DURATION_MIN;
+    let ok = true;
+    for(const b of existing){
+      const bStart = timeToMinutes(b.time);
+      const bEnd = bStart + SERVICE_DURATION_MIN;
+      if(start >= bStart){
+        if(start < bEnd + b.travel){ ok = false; break; }
+      } else {
+        if(end + b.travel > bStart){ ok = false; break; }
+      }
+    }
+    if(ok) slots.push(minutesToTime(start));
+  }
+  return slots;
+}
+
+// =======================================================
 // RESERVATIONS (public)
 // =======================================================
 
@@ -176,20 +271,42 @@ app.get('/api/availability', async (req, res) => {
   }
 });
 
+// GET /api/available-slots?date=YYYY-MM-DD&address=...
+app.get('/api/available-slots', async (req, res) => {
+  try{
+    const { date, address } = req.query;
+    if(!isValidFutureDate(date)) return res.status(400).json({ error: 'INVALID_DATE' });
+    if(!address) return res.status(400).json({ error: 'MISSING_ADDRESS' });
+    const database = await getDb();
+    const slots = await computeAvailableSlots(database, date, address);
+    res.json({ slots });
+  }catch(err){
+    console.error(err);
+    res.status(500).json({ error: 'SERVER_ERROR' });
+  }
+});
+
 // POST /api/book
 app.post('/api/book', async (req, res) => {
   try{
-    const { date, name, email, phone, service, vehicule, address } = req.body || {};
+    const { date, time, name, email, phone, service, vehicule, address } = req.body || {};
     if(!isValidFutureDate(date)) return res.status(400).json({ error: 'INVALID_DATE' });
     if(!name || !email || !phone) return res.status(400).json({ error: 'MISSING_FIELDS' });
+    if(!time || !/^\d{2}:\d{2}$/.test(time)) return res.status(400).json({ error: 'MISSING_TIME' });
+    if(!address) return res.status(400).json({ error: 'MISSING_ADDRESS' });
 
     const database = await getDb();
     const collection = database.collection('bookings');
     const currentCount = await collection.countDocuments({ date, status: { $ne: 'rejected' } });
     if(currentCount >= MAX_PER_DAY) return res.status(409).json({ error: 'FULL' });
 
+    // Revérifie que le créneau demandé est toujours libre (anti double-réservation)
+    const freeSlots = await computeAvailableSlots(database, date, address);
+    if(!freeSlots.includes(time)) return res.status(409).json({ error: 'SLOT_TAKEN' });
+
     const doc = {
       date,
+      time,
       name: String(name).slice(0, 120),
       email: String(email).slice(0, 160),
       phone: String(phone).slice(0, 40),
@@ -209,7 +326,7 @@ app.post('/api/book', async (req, res) => {
       html: getEmailTemplate(
         'Demande de réservation',
         `<p>Bonjour <b>${doc.name}</b>,</p>
-         <p>Votre demande pour le <b>${doc.date}</b> (${doc.service || 'formule non précisée'}) a bien été enregistrée.</p>
+         <p>Votre demande pour le <b>${doc.date} à ${doc.time}</b> (${doc.service || 'formule non précisée'}) a bien été enregistrée.</p>
          <p>Elle est actuellement <b>en attente de confirmation</b> par notre équipe. Vous recevrez un nouvel email dès qu'elle sera validée.</p>
          <p>À très vite,<br>L'équipe Zovalux</p>`
       )
@@ -222,6 +339,7 @@ app.post('/api/book', async (req, res) => {
         html: `<p>Nouvelle demande :</p>
           <ul>
             <li>Date : ${doc.date}</li>
+            <li>Heure : ${doc.time}</li>
             <li>Nom : ${doc.name}</li>
             <li>Email : ${doc.email}</li>
             <li>Téléphone : ${doc.phone}</li>
@@ -283,7 +401,7 @@ app.post('/api/admin/bookings/:id/:action', requireAdmin, async (req, res) => {
     const title = status === 'confirmed' ? 'Réservation confirmée ✓' : 'Mise à jour de votre demande';
     const content = status === 'confirmed'
       ? `<p>Bonjour <b>${booking.name}</b>,</p>
-         <p>Excellente nouvelle ! Votre réservation du <b>${booking.date}</b> est <b>confirmée</b>.</p>
+         <p>Excellente nouvelle ! Votre réservation du <b>${booking.date}${booking.time ? ' à ' + booking.time : ''}</b> est <b>confirmée</b>.</p>
          <p>Notre équipe se présentera à l'adresse indiquée avec tout le matériel nécessaire pour prendre soin de votre véhicule.</p>
          <p>À très bientôt,<br>L'équipe Zovalux</p>`
       : `<p>Bonjour <b>${booking.name}</b>,</p>
