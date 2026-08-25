@@ -85,6 +85,7 @@ const DAY_START = '08:00';
 const DAY_END = '18:00';
 const SLOT_STEP_MIN = 10;             // granularité des créneaux proposés
 const DEFAULT_TRAVEL_MIN = 20;        // valeur de secours si géocodage/trajet échoue
+const LARGE_VEHICLE_SURCHARGE = 15;   // supplément SUV/monospace 7-8 places/4x4/véhicule rallongé
 const NOMINATIM_USER_AGENT = 'ZovaluxBooking/1.0 (contact: zovalux.pro@gmail.com)';
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.MONGODB_DB || 'zovalux';
@@ -289,7 +290,7 @@ app.get('/api/available-slots', async (req, res) => {
 // POST /api/book
 app.post('/api/book', async (req, res) => {
   try{
-    const { date, time, name, email, phone, service, vehicule, address } = req.body || {};
+    const { date, time, name, email, phone, service, vehicule, vehicleCategory, address } = req.body || {};
     if(!isValidFutureDate(date)) return res.status(400).json({ error: 'INVALID_DATE' });
     if(!name || !email || !phone) return res.status(400).json({ error: 'MISSING_FIELDS' });
     if(!time || !/^\d{2}:\d{2}$/.test(time)) return res.status(400).json({ error: 'MISSING_TIME' });
@@ -304,6 +305,8 @@ app.post('/api/book', async (req, res) => {
     const freeSlots = await computeAvailableSlots(database, date, address);
     if(!freeSlots.includes(time)) return res.status(409).json({ error: 'SLOT_TAKEN' });
 
+    const isLargeVehicle = vehicleCategory === 'large';
+
     const doc = {
       date,
       time,
@@ -312,6 +315,8 @@ app.post('/api/book', async (req, res) => {
       phone: String(phone).slice(0, 40),
       service: service ? String(service).slice(0, 80) : null,
       vehicule: vehicule ? String(vehicule).slice(0, 120) : null,
+      vehicleCategory: isLargeVehicle ? 'large' : 'standard',
+      surcharge: isLargeVehicle ? LARGE_VEHICLE_SURCHARGE : 0,
       address: address ? String(address).slice(0, 300) : null,
       status: 'pending', // pending | confirmed | rejected
       createdAt: new Date()
@@ -327,6 +332,7 @@ app.post('/api/book', async (req, res) => {
         'Demande de réservation',
         `<p>Bonjour <b>${doc.name}</b>,</p>
          <p>Votre demande pour le <b>${doc.date} à ${doc.time}</b> (${doc.service || 'formule non précisée'}) a bien été enregistrée.</p>
+         ${doc.surcharge > 0 ? `<p>Un supplément de <b>${doc.surcharge}€</b> s'applique pour votre catégorie de véhicule (SUV / monospace / 4x4 / véhicule rallongé).</p>` : ''}
          <p>Elle est actuellement <b>en attente de confirmation</b> par notre équipe. Vous recevrez un nouvel email dès qu'elle sera validée.</p>
          <p>À très vite,<br>L'équipe Zovalux</p>`
       )
@@ -344,7 +350,7 @@ app.post('/api/book', async (req, res) => {
             <li>Email : ${doc.email}</li>
             <li>Téléphone : ${doc.phone}</li>
             <li>Formule : ${doc.service || '-'}</li>
-            <li>Véhicule : ${doc.vehicule || '-'}</li>
+            <li>Véhicule : ${doc.vehicule || '-'} (${doc.vehicleCategory === 'large' ? `catégorie 2 — SUV/monospace/4x4/rallongé, +${doc.surcharge}€` : 'catégorie 1 — citadine/berline'})</li>
             <li>Adresse : ${doc.address || '-'}</li>
           </ul>
           <p>Rendez-vous sur le panneau admin pour confirmer ou refuser.</p>`
