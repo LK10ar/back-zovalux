@@ -357,7 +357,7 @@ app.post('/api/book', async (req, res) => {
       });
     }
 
-    res.json({ success: true, id: result.insertedId });
+    res.json({ success: true, id: result.insertedId, dayCount: currentCount + 1 });
   }catch(err){
     console.error(err);
     res.status(500).json({ error: 'SERVER_ERROR' });
