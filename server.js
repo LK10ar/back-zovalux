@@ -448,7 +448,7 @@ app.get('/api/gallery', async (req, res) => {
   }
 });
 
-// POST /api/admin/gallery — { imageData (base64), caption, type: 'before'|'after' }
+// POST /api/admin/gallery — { imageData (base64), caption, type: 'before'|'after'|'before-after' }
 app.post('/api/admin/gallery', requireAdmin, async (req, res) => {
   try{
     const { imageData, caption, type } = req.body || {};
@@ -457,7 +457,7 @@ app.post('/api/admin/gallery', requireAdmin, async (req, res) => {
     const result = await database.collection('gallery').insertOne({
       imageData,
       caption: caption ? String(caption).slice(0, 140) : '',
-      type: (type === 'before' || type === 'after') ? type : 'after',
+      type: (type === 'before' || type === 'after' || type === 'before-after') ? type : 'after',
       createdAt: new Date()
     });
     res.json({ success: true, id: result.insertedId });
